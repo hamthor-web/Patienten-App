@@ -44,6 +44,8 @@ public class MainActivity extends Activity implements RecognitionListener {
   private boolean gameListening = false;
   private boolean gameVisible = false;
   private boolean pendingFirstRound = false;
+  private boolean usingOnDeviceRecognizer = false;
+  private boolean recognizerFallbackTried = false;
 
   private SharedPreferences prefs;
   private LinearLayout root;
@@ -105,6 +107,7 @@ public class MainActivity extends Activity implements RecognitionListener {
       if (android.os.Build.VERSION.SDK_INT >= 31 &&
           SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
         recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
+        usingOnDeviceRecognizer = true;
       } else {
         recognizer = SpeechRecognizer.createSpeechRecognizer(this);
       }
@@ -112,6 +115,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     } catch (Exception ex) {
       try {
         recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        usingOnDeviceRecognizer = false;
         recognizer.setRecognitionListener(this);
       } catch (Exception ignored) {
         recognizer = null;
@@ -200,6 +204,12 @@ public class MainActivity extends Activity implements RecognitionListener {
       speak("Einrichtung abgeschlossen.");
       showGame();
     });
+
+    if (!hasMicPermission() && !prefs.getBoolean("permission_requested", false)) {
+      prefs.edit().putBoolean("permission_requested", true).apply();
+      root.post(() -> requestPermissions(
+          new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO));
+    }
   }
 
   private void showGame() {
@@ -371,8 +381,7 @@ public class MainActivity extends Activity implements RecognitionListener {
   }
 
   private String recognitionModeText() {
-    if (android.os.Build.VERSION.SDK_INT >= 31 &&
-        SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+    if (usingOnDeviceRecognizer) {
       return "Spracherkennung: auf diesem Gerät";
     }
     return "Spracherkennung: Android-Dienst";
@@ -408,12 +417,44 @@ public class MainActivity extends Activity implements RecognitionListener {
 
   @Override
   public void onError(int error) {
+    if (usingOnDeviceRecognizer && !recognizerFallbackTried &&
+        (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+         error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
+         error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED)) {
+      boolean retrySetup = testingSetup;
+      boolean retryGame = gameListening;
+      recognizerFallbackTried = true;
+      if (switchToSystemRecognizer()) {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+          testingSetup = retrySetup;
+          gameListening = retryGame;
+          startListeningNow();
+        }, 250);
+        return;
+      }
+    }
     if (testingSetup) {
       testingSetup = false;
       if (testStatus != null) testStatus.setText("Diesmal wurde nichts erkannt. Bitte erneut testen.");
     } else if (gameListening) {
       gameListening = false;
       if (gameStatus != null) gameStatus.setText("Diesmal wurde nichts erkannt. Bitte erneut versuchen.");
+    }
+  }
+
+  private boolean switchToSystemRecognizer() {
+    try {
+      if (recognizer != null) {
+        recognizer.cancel();
+        recognizer.destroy();
+      }
+      recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+      recognizer.setRecognitionListener(this);
+      usingOnDeviceRecognizer = false;
+      return true;
+    } catch (Exception ignored) {
+      recognizer = null;
+      return false;
     }
   }
 
