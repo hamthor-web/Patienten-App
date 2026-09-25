@@ -1,21 +1,17 @@
 package de.heikeamthor.patientenapp;
 
-import android.Manifest;
 import android.app.Activity;
-import android.content.Intent;
-import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Shader;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
-import android.speech.tts.UtteranceProgressListener;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -23,52 +19,38 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
-import java.util.Random;
 
-public class MainActivity extends Activity implements RecognitionListener {
+public class MainActivity extends Activity {
 
-  private static final int REQ_AUDIO = 1001;
-  private static final int BG = Color.rgb(239, 236, 228);
-  private static final int TEXT = Color.rgb(34, 48, 56);
-  private static final int MUTED = Color.rgb(109, 119, 125);
-  private static final int ACCENT = Color.rgb(83, 111, 119);
+  private static final int BG = Color.rgb(238, 234, 224);
+  private static final int PANEL = Color.rgb(253, 250, 244);
+  private static final int TEXT = Color.rgb(37, 48, 54);
+  private static final int MUTED = Color.rgb(101, 111, 116);
+  private static final int ACCENT = Color.rgb(92, 120, 111);
 
-  private SpeechRecognizer recognizer;
+  private final Handler handler = new Handler(Looper.getMainLooper());
   private TextToSpeech tts;
   private boolean ttsReady = false;
-  private boolean listenAfterSpeech = false;
-  private boolean testingSetup = false;
-  private boolean gameListening = false;
-  private boolean gameVisible = false;
-  private boolean pendingFirstRound = false;
-  private boolean usingOnDeviceRecognizer = false;
-  private boolean recognizerFallbackTried = false;
-
-  private SharedPreferences prefs;
   private LinearLayout root;
-  private TextView setupStatus;
-  private TextView testStatus;
-  private TextView gameStatus;
-  private Button testButton;
-  private Button finishButton;
-  private ColorGameView gameView;
+  private TextView taskText;
+  private TextView statusText;
+  private KitchenGameView gameView;
+  private int taskIndex = 0;
+
+  private final String[] tasks = {
+      "Stellen Sie die Tasse an einen Platz, der Ihnen passend erscheint.",
+      "Schieben Sie den Kochtopf an einen guten Platz in der Küche.",
+      "Stellen Sie den Besen dorthin, wo er gut stehen kann.",
+      "Schauen Sie sich die Küche in Ruhe an. Wo steht die Tasse?",
+      "Räumen Sie weiter so auf, wie es für Sie stimmig ist."
+  };
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
-    prefs = getSharedPreferences("patienten_app", MODE_PRIVATE);
     initTts();
-    initRecognizer();
-
-    if (prefs.getBoolean("setup_complete", false) &&
-        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-      showGame();
-    } else {
-      showSetup();
-    }
+    showKitchenGame();
   }
 
   private void initTts() {
@@ -76,51 +58,67 @@ public class MainActivity extends Activity implements RecognitionListener {
       if (status == TextToSpeech.SUCCESS) {
         ttsReady = true;
         tts.setLanguage(Locale.GERMANY);
-        tts.setSpeechRate(0.90f);
-        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-          @Override public void onStart(String utteranceId) {}
-          @Override public void onError(String utteranceId) {
-            if (utteranceId.startsWith("listen_") && listenAfterSpeech) {
-              listenAfterSpeech = false;
-              runOnUiThread(MainActivity.this::startListeningNow);
-            }
-          }
-          @Override public void onDone(String utteranceId) {
-            if (utteranceId.startsWith("listen_") && listenAfterSpeech) {
-              listenAfterSpeech = false;
-              runOnUiThread(() -> new Handler(Looper.getMainLooper()).postDelayed(
-                  MainActivity.this::startListeningNow, 250));
-            }
-          }
-        });
-        if (pendingFirstRound && gameVisible) {
-          pendingFirstRound = false;
-          runOnUiThread(MainActivity.this::beginGameListening);
-        }
+        tts.setSpeechRate(0.86f);
+        handler.postDelayed(() -> speak(currentTask()), 450);
       }
     });
   }
 
-  private void initRecognizer() {
-    if (!SpeechRecognizer.isRecognitionAvailable(this)) return;
-    try {
-      if (android.os.Build.VERSION.SDK_INT >= 31 &&
-          SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-        recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
-        usingOnDeviceRecognizer = true;
-      } else {
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-      }
-      recognizer.setRecognitionListener(this);
-    } catch (Exception ex) {
-      try {
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-        usingOnDeviceRecognizer = false;
-        recognizer.setRecognitionListener(this);
-      } catch (Exception ignored) {
-        recognizer = null;
-      }
-    }
+  private void showKitchenGame() {
+    root = new LinearLayout(this);
+    root.setOrientation(LinearLayout.VERTICAL);
+    root.setPadding(dp(18), dp(18), dp(18), dp(16));
+    root.setBackgroundColor(BG);
+    setContentView(root);
+
+    TextView title = text("Küchenübung", 28, true);
+    root.addView(title);
+
+    taskText = text(currentTask(), 22, true);
+    taskText.setGravity(Gravity.CENTER_VERTICAL);
+    taskText.setMinHeight(dp(112));
+    taskText.setBackgroundColor(PANEL);
+    taskText.setPadding(dp(18), dp(14), dp(18), dp(14));
+    root.addView(taskText, fullWidthWrap());
+
+    statusText = text("Die Aufgabe bleibt sichtbar. Sie können sich Zeit lassen.", 17, false);
+    statusText.setTextColor(MUTED);
+    root.addView(statusText);
+
+    gameView = new KitchenGameView();
+    LinearLayout.LayoutParams gameLp = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+    gameLp.setMargins(0, dp(10), 0, dp(10));
+    root.addView(gameView, gameLp);
+
+    LinearLayout controls = new LinearLayout(this);
+    controls.setOrientation(LinearLayout.HORIZONTAL);
+    controls.setGravity(Gravity.CENTER);
+
+    Button repeat = button("Vorlesen");
+    Button next = button("Nächste Aufgabe");
+    controls.addView(repeat, new LinearLayout.LayoutParams(0, dp(68), 1f));
+    controls.addView(next, new LinearLayout.LayoutParams(0, dp(68), 1f));
+    root.addView(controls);
+
+    repeat.setOnClickListener(v -> speak(currentTask()));
+    next.setOnClickListener(v -> nextTask());
+
+    gameView.setOnObjectPlacedListener(name -> {
+      statusText.setText(name + " steht jetzt an diesem Platz.");
+      speak(name + " steht jetzt an diesem Platz.");
+    });
+  }
+
+  private void nextTask() {
+    taskIndex = (taskIndex + 1) % tasks.length;
+    taskText.setText(currentTask());
+    statusText.setText("Die Aufgabe bleibt sichtbar. Sie können sich Zeit lassen.");
+    speak(currentTask());
+  }
+
+  private String currentTask() {
+    return tasks[taskIndex];
   }
 
   private TextView text(String value, int sp, boolean bold) {
@@ -128,7 +126,8 @@ public class MainActivity extends Activity implements RecognitionListener {
     tv.setText(value);
     tv.setTextColor(TEXT);
     tv.setTextSize(sp);
-    tv.setPadding(dp(4), dp(8), dp(4), dp(8));
+    tv.setPadding(dp(4), dp(6), dp(4), dp(6));
+    tv.setLineSpacing(dp(2), 1.0f);
     if (bold) tv.setTypeface(tv.getTypeface(), android.graphics.Typeface.BOLD);
     return tv;
   }
@@ -139,338 +138,28 @@ public class MainActivity extends Activity implements RecognitionListener {
     b.setTextSize(18);
     b.setTextColor(TEXT);
     b.setAllCaps(false);
-    b.setMinHeight(dp(60));
+    b.setMinHeight(dp(64));
     return b;
   }
 
-  private void baseRoot() {
-    root = new LinearLayout(this);
-    root.setOrientation(LinearLayout.VERTICAL);
-    root.setPadding(dp(22), dp(22), dp(22), dp(22));
-    root.setBackgroundColor(BG);
-    setContentView(root);
-  }
-
-  private void showSetup() {
-    gameVisible = false;
-    stopListening();
-    baseRoot();
-    root.addView(text("Einrichtung", 30, true));
-    root.addView(text("Diese Einrichtung ist nur einmal nötig. Danach startet die Übung direkt.", 18, false));
-
-    root.addView(text("1   Mikrofon freigeben", 21, true));
-    root.addView(text("Die App braucht das Mikrofon nur für die Spracherkennung.", 17, false));
-
-    Button micButton = button("Mikrofon aktivieren");
-    root.addView(micButton, fullWidth());
-    setupStatus = text(hasMicPermission() ? "Mikrofon ist bereits freigegeben." : "Noch nicht aktiviert.", 17, false);
-    setupStatus.setTextColor(hasMicPermission() ? ACCENT : MUTED);
-    root.addView(setupStatus);
-
-    root.addView(text("2   Sprachsteuerung testen", 21, true));
-    root.addView(text("Beim Test sagen Sie einmal „Rot“.", 17, false));
-
-    testButton = button("Sprachsteuerung testen");
-    testButton.setEnabled(hasMicPermission() && recognizer != null);
-    root.addView(testButton, fullWidth());
-
-    testStatus = text(recognizer == null ? "Auf diesem Gerät ist keine Spracherkennung verfügbar." : "Noch nicht getestet.", 17, false);
-    root.addView(testStatus);
-
-    finishButton = button("Einrichtung abschließen");
-    finishButton.setEnabled(false);
-    root.addView(finishButton, fullWidth());
-
-    micButton.setOnClickListener(v -> {
-      if (hasMicPermission()) {
-        setupStatus.setText("Mikrofon ist freigegeben.");
-        testButton.setEnabled(recognizer != null);
-        speak("Mikrofon ist aktiviert.");
-      } else {
-        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO);
-      }
-    });
-
-    testButton.setOnClickListener(v -> {
-      stopListening();
-      testingSetup = true;
-      gameListening = false;
-      testStatus.setText("Ich höre gleich zu …");
-      speakThenListen("Sagen Sie jetzt Rot.");
-    });
-
-    finishButton.setOnClickListener(v -> {
-      prefs.edit().putBoolean("setup_complete", true).apply();
-      speak("Einrichtung abgeschlossen.");
-      showGame();
-    });
-
-    if (!hasMicPermission() && !prefs.getBoolean("permission_requested", false)) {
-      prefs.edit().putBoolean("permission_requested", true).apply();
-      root.post(() -> requestPermissions(
-          new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO));
-    }
-  }
-
-  private void showGame() {
-    gameVisible = true;
-    stopListening();
-    baseRoot();
-    root.addView(text("Farbspiel", 30, true));
-
-    TextView mode = text(recognitionModeText(), 15, false);
-    mode.setTextColor(MUTED);
-    root.addView(mode);
-
-    gameView = new ColorGameView();
-    LinearLayout.LayoutParams gameLp = new LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-    gameLp.setMargins(0, dp(8), 0, dp(8));
-    root.addView(gameView, gameLp);
-
-    LinearLayout controls = new LinearLayout(this);
-    controls.setOrientation(LinearLayout.HORIZONTAL);
-    controls.setGravity(Gravity.CENTER);
-
-    Button newRound = button("Neue Runde");
-    Button repeat = button("Frage wiederholen");
-    controls.addView(newRound, new LinearLayout.LayoutParams(0, dp(64), 1f));
-    controls.addView(repeat, new LinearLayout.LayoutParams(0, dp(64), 1f));
-    root.addView(controls);
-
-    gameStatus = text("Die erste Runde startet gleich.", 18, false);
-    gameStatus.setGravity(Gravity.CENTER);
-    root.addView(gameStatus);
-
-    Button setupAgain = button("Einrichtung erneut öffnen");
-    root.addView(setupAgain, fullWidth());
-
-    newRound.setOnClickListener(v -> beginGameListening());
-    repeat.setOnClickListener(v -> beginGameListening());
-    setupAgain.setOnClickListener(v -> showSetup());
-
-    gameView.setOnCorrectListener(() -> {
-      gameStatus.setText("Ziel gefunden.");
-      speak("Ziel gefunden.");
-      new Handler(Looper.getMainLooper()).postDelayed(() -> {
-        if (gameView != null) gameView.resetRound();
-        if (gameStatus != null) gameStatus.setText("Bereit für die nächste Runde.");
-      }, 1100);
-    });
-
-    gameView.post(() -> {
-      if (!gameVisible) return;
-      if (ttsReady) beginGameListening();
-      else pendingFirstRound = true;
-    });
-  }
-
-  private void beginGameListening() {
-    if (!hasMicPermission()) {
-      prefs.edit().putBoolean("setup_complete", false).apply();
-      showSetup();
-      return;
-    }
-    if (recognizer == null) {
-      gameStatus.setText("Spracherkennung ist auf diesem Gerät nicht verfügbar.");
-      return;
-    }
-    stopListening();
-    testingSetup = false;
-    gameListening = true;
-    gameStatus.setText("Ich höre gleich zu …");
-    speakThenListen("Nennen Sie eine Farbe. Rot, Blau oder Grün.");
+  private LinearLayout.LayoutParams fullWidthWrap() {
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+    lp.setMargins(0, dp(8), 0, dp(4));
+    return lp;
   }
 
   private void speak(String message) {
-    if (!ttsReady) return;
-    tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, "say_" + System.nanoTime());
-  }
-
-  private void speakThenListen(String message) {
-    if (!ttsReady) {
-      startListeningNow();
-      return;
-    }
-    listenAfterSpeech = true;
-    tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, "listen_" + System.nanoTime());
-  }
-
-  private void startListeningNow() {
-    if (recognizer == null || !hasMicPermission() || isFinishing() || isDestroyed()) return;
-    Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "de-DE");
-    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "de-DE");
-    intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-    intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
-    try {
-      recognizer.cancel();
-      recognizer.startListening(intent);
-      if (testingSetup && testStatus != null) testStatus.setText("Ich höre zu … sagen Sie „Rot“.");
-      if (gameListening && gameStatus != null) gameStatus.setText("Ich höre zu …");
-    } catch (Exception ex) {
-      statusMessage("Spracherkennung konnte nicht gestartet werden.");
-    }
-  }
-
-  private void stopListening() {
-    listenAfterSpeech = false;
-    if (recognizer != null) {
-      try { recognizer.cancel(); } catch (Exception ignored) {}
-    }
-  }
-
-  private String recognizedColor(List<String> results) {
-    if (results == null) return null;
-    for (String s : results) {
-      String x = s.toLowerCase(Locale.GERMAN).trim();
-      if (x.contains("rot")) return "rot";
-      if (x.contains("blau")) return "blau";
-      if (x.contains("grün") || x.contains("gruen") || x.contains("grun")) return "grün";
-    }
-    return null;
-  }
-
-  private void handleRecognition(List<String> results) {
-    String color = recognizedColor(results);
-
-    if (testingSetup) {
-      testingSetup = false;
-      if ("rot".equals(color)) {
-        testStatus.setText("Sprachsteuerung funktioniert. „Rot“ wurde erkannt.");
-        testStatus.setTextColor(ACCENT);
-        finishButton.setEnabled(true);
-        speak("Sprachsteuerung funktioniert.");
-      } else {
-        testStatus.setText("„Rot“ wurde noch nicht erkannt. Bitte noch einmal testen.");
-      }
-      return;
-    }
-
-    if (gameListening) {
-      gameListening = false;
-      if (color == null) {
-        gameStatus.setText("Keine Farbe erkannt. Bitte noch einmal versuchen.");
-        speak("Rot, Blau oder Grün?");
-        return;
-      }
-      int c = "rot".equals(color) ? Color.rgb(200,75,75) :
-              "blau".equals(color) ? Color.rgb(79,120,184) :
-              Color.rgb(79,138,98);
-      gameView.startRound(c);
-      gameStatus.setText("Jetzt den grauen Kreis zum farbigen Ziel schieben.");
-      speak(("rot".equals(color) ? "Rot" : "blau".equals(color) ? "Blau" : "Grün") +
-          ". Schieben Sie den Kreis zum passenden Ziel.");
-    }
-  }
-
-  private boolean hasMicPermission() {
-    return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
-  }
-
-  private LinearLayout.LayoutParams fullWidth() {
-    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT, dp(64));
-    lp.setMargins(0, dp(6), 0, dp(6));
-    return lp;
+    if (!ttsReady || tts == null) return;
+    tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, "task_" + System.nanoTime());
   }
 
   private int dp(float v) {
     return Math.round(v * getResources().getDisplayMetrics().density);
   }
 
-  private String recognitionModeText() {
-    if (usingOnDeviceRecognizer) {
-      return "Spracherkennung: auf diesem Gerät";
-    }
-    return "Spracherkennung: Android-Dienst";
-  }
-
-  private void statusMessage(String msg) {
-    if (testingSetup && testStatus != null) testStatus.setText(msg);
-    else if (gameStatus != null) gameStatus.setText(msg);
-  }
-
-  @Override
-  public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-    super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-    if (requestCode == REQ_AUDIO) {
-      boolean ok = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-      if (setupStatus != null) {
-        setupStatus.setText(ok ? "Mikrofon ist freigegeben." :
-            "Mikrofon wurde nicht freigegeben. Sie können die Freigabe erneut versuchen.");
-        setupStatus.setTextColor(ok ? ACCENT : MUTED);
-      }
-      if (testButton != null) testButton.setEnabled(ok && recognizer != null);
-      if (ok) speak("Mikrofon ist aktiviert.");
-    }
-  }
-
-  @Override public void onReadyForSpeech(Bundle params) {}
-  @Override public void onBeginningOfSpeech() {}
-  @Override public void onRmsChanged(float rmsdB) {}
-  @Override public void onBufferReceived(byte[] buffer) {}
-  @Override public void onEndOfSpeech() {}
-  @Override public void onEvent(int eventType, Bundle params) {}
-  @Override public void onPartialResults(Bundle partialResults) {}
-
-  @Override
-  public void onError(int error) {
-    if (usingOnDeviceRecognizer && !recognizerFallbackTried &&
-        (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
-         error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
-         error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED)) {
-      boolean retrySetup = testingSetup;
-      boolean retryGame = gameListening;
-      recognizerFallbackTried = true;
-      if (switchToSystemRecognizer()) {
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-          testingSetup = retrySetup;
-          gameListening = retryGame;
-          startListeningNow();
-        }, 250);
-        return;
-      }
-    }
-    if (testingSetup) {
-      testingSetup = false;
-      if (testStatus != null) testStatus.setText("Diesmal wurde nichts erkannt. Bitte erneut testen.");
-    } else if (gameListening) {
-      gameListening = false;
-      if (gameStatus != null) gameStatus.setText("Diesmal wurde nichts erkannt. Bitte erneut versuchen.");
-    }
-  }
-
-  private boolean switchToSystemRecognizer() {
-    try {
-      if (recognizer != null) {
-        recognizer.cancel();
-        recognizer.destroy();
-      }
-      recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-      recognizer.setRecognitionListener(this);
-      usingOnDeviceRecognizer = false;
-      return true;
-    } catch (Exception ignored) {
-      recognizer = null;
-      return false;
-    }
-  }
-
-  @Override
-  public void onResults(Bundle results) {
-    ArrayList<String> list = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-    handleRecognition(list);
-  }
-
   @Override
   protected void onDestroy() {
-    gameVisible = false;
-    if (recognizer != null) {
-      recognizer.cancel();
-      recognizer.destroy();
-    }
     if (tts != null) {
       tts.stop();
       tts.shutdown();
@@ -478,130 +167,281 @@ public class MainActivity extends Activity implements RecognitionListener {
     super.onDestroy();
   }
 
-  private class ColorGameView extends View {
+  private class KitchenGameView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Random random = new Random();
-    private final float targetRadius = dp(55);
-    private final float dragRadius = dp(46);
-    private final int neutral = Color.rgb(144,154,160);
-    private int targetColor = Color.LTGRAY;
-    private int activeIndex = -1;
-    private float dragX, dragY;
-    private boolean draggingCircle = false;
-    private boolean roundActive = false;
-    private Runnable onCorrect;
+    private final RectF rect = new RectF();
+    private final Path path = new Path();
+    private Draggable cup;
+    private Draggable pot;
+    private Draggable broom;
+    private Draggable active;
+    private float grabDx;
+    private float grabDy;
+    private int lastW = -1;
+    private int lastH = -1;
+    private ObjectPlacedListener listener;
 
-    ColorGameView() {
+    KitchenGameView() {
       super(MainActivity.this);
-      setBackgroundColor(Color.rgb(255,253,248));
-      setOnTouchListener((v, event) -> handleTouch(event));
-      post(this::resetRound);
+      setBackgroundColor(PANEL);
     }
 
-    void setOnCorrectListener(Runnable r) { onCorrect = r; }
-
-    void startRound(int color) {
-      targetColor = color;
-      activeIndex = random.nextInt(3);
-      roundActive = true;
-      resetDragOnly();
-      invalidate();
+    void setOnObjectPlacedListener(ObjectPlacedListener l) {
+      listener = l;
     }
 
-    void resetRound() {
-      roundActive = false;
-      activeIndex = -1;
-      targetColor = Color.LTGRAY;
-      resetDragOnly();
-      invalidate();
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+      super.onSizeChanged(w, h, oldw, oldh);
+      if (w != lastW || h != lastH || cup == null) {
+        lastW = w;
+        lastH = h;
+        cup = new Draggable("Die Tasse", w * .21f, h * .70f, dp(42), Color.rgb(112, 148, 165));
+        pot = new Draggable("Der Kochtopf", w * .52f, h * .73f, dp(50), Color.rgb(96, 104, 108));
+        broom = new Draggable("Der Besen", w * .82f, h * .68f, dp(54), Color.rgb(164, 116, 72));
+      }
     }
-
-    private void resetDragOnly() {
-      dragX = getWidth() > 0 ? getWidth() / 2f : dp(160);
-      dragY = getHeight() > 0 ? getHeight() - dp(74) : dp(280);
-    }
-
-    private float tx(int i) {
-      if (i == 0) return getWidth() * .18f;
-      if (i == 1) return getWidth() * .50f;
-      return getWidth() * .82f;
-    }
-
-    private float ty() { return dp(82); }
 
     @Override
     protected void onDraw(Canvas canvas) {
       super.onDraw(canvas);
-
-      paint.setStyle(Paint.Style.FILL);
-      for (int i = 0; i < 3; i++) {
-        paint.setColor(i == activeIndex ? targetColor : Color.rgb(248,247,243));
-        canvas.drawCircle(tx(i), ty(), targetRadius, paint);
-
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(3));
-        paint.setColor(i == activeIndex ? targetColor : Color.rgb(186,194,198));
-        canvas.drawCircle(tx(i), ty(), targetRadius, paint);
-        paint.setStyle(Paint.Style.FILL);
-      }
-
-      paint.setColor(neutral);
-      canvas.drawCircle(dragX, dragY, dragRadius, paint);
-
-      paint.setColor(Color.WHITE);
-      paint.setTextSize(dp(15));
-      paint.setTextAlign(Paint.Align.CENTER);
-      paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-      canvas.drawText("Schieben", dragX, dragY + dp(5), paint);
+      drawKitchen(canvas);
+      drawSoftTargets(canvas);
+      drawCup(canvas, cup);
+      drawPot(canvas, pot);
+      drawBroom(canvas, broom);
     }
 
-    private boolean handleTouch(MotionEvent e) {
-      if (!roundActive) return true;
-      switch (e.getActionMasked()) {
+    private void drawKitchen(Canvas canvas) {
+      int w = getWidth();
+      int h = getHeight();
+
+      paint.setStyle(Paint.Style.FILL);
+      paint.setShader(new LinearGradient(0, 0, 0, h,
+          Color.rgb(255, 252, 245), Color.rgb(238, 232, 220), Shader.TileMode.CLAMP));
+      canvas.drawRect(0, 0, w, h, paint);
+      paint.setShader(null);
+
+      paint.setColor(Color.rgb(224, 214, 198));
+      canvas.drawRect(0, h * .58f, w, h, paint);
+
+      paint.setColor(Color.rgb(232, 226, 215));
+      for (int i = 0; i < 5; i++) {
+        float y = h * .64f + i * dp(34);
+        canvas.drawRect(0, y, w, y + dp(2), paint);
+      }
+
+      paint.setColor(Color.rgb(218, 227, 225));
+      rect.set(w * .08f, h * .08f, w * .35f, h * .31f);
+      canvas.drawRoundRect(rect, dp(8), dp(8), paint);
+      paint.setColor(Color.rgb(250, 248, 242));
+      rect.inset(dp(7), dp(7));
+      canvas.drawRoundRect(rect, dp(6), dp(6), paint);
+      paint.setColor(Color.rgb(184, 201, 198));
+      canvas.drawRect(w * .215f - dp(1), h * .09f, w * .215f + dp(1), h * .30f, paint);
+      canvas.drawRect(w * .09f, h * .195f - dp(1), w * .34f, h * .195f + dp(1), paint);
+
+      paint.setColor(Color.rgb(204, 188, 165));
+      rect.set(w * .44f, h * .08f, w * .86f, h * .25f);
+      canvas.drawRoundRect(rect, dp(8), dp(8), paint);
+      paint.setColor(Color.rgb(186, 166, 139));
+      canvas.drawRect(w * .45f, h * .17f, w * .85f, h * .19f, paint);
+      drawHandle(canvas, w * .55f, h * .155f);
+      drawHandle(canvas, w * .74f, h * .155f);
+
+      paint.setColor(Color.rgb(171, 149, 121));
+      canvas.drawRect(w * .06f, h * .46f, w * .94f, h * .51f, paint);
+      paint.setColor(Color.rgb(198, 177, 146));
+      canvas.drawRect(w * .08f, h * .50f, w * .91f, h * .84f, paint);
+
+      paint.setColor(Color.rgb(231, 228, 220));
+      rect.set(w * .45f, h * .55f, w * .75f, h * .79f);
+      canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+      paint.setColor(Color.rgb(91, 99, 101));
+      canvas.drawCircle(w * .54f, h * .62f, dp(25), paint);
+      canvas.drawCircle(w * .66f, h * .62f, dp(25), paint);
+
+      paint.setColor(Color.rgb(172, 141, 103));
+      canvas.drawRect(w * .08f, h * .58f, w * .35f, h * .84f, paint);
+      paint.setColor(Color.rgb(151, 119, 83));
+      canvas.drawRect(w * .205f, h * .59f, w * .21f, h * .83f, paint);
+      drawHandle(canvas, w * .16f, h * .70f);
+      drawHandle(canvas, w * .28f, h * .70f);
+
+      paint.setColor(Color.rgb(126, 149, 104));
+      canvas.drawCircle(w * .89f, h * .37f, dp(18), paint);
+      canvas.drawCircle(w * .84f, h * .39f, dp(14), paint);
+      canvas.drawCircle(w * .91f, h * .43f, dp(15), paint);
+      paint.setColor(Color.rgb(159, 122, 94));
+      rect.set(w * .84f, h * .45f, w * .92f, h * .52f);
+      canvas.drawRoundRect(rect, dp(7), dp(7), paint);
+
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(dp(2));
+      paint.setColor(Color.rgb(218, 207, 190));
+      canvas.drawLine(w * .40f, h * .30f, w * .92f, h * .30f, paint);
+      canvas.drawLine(w * .40f, h * .38f, w * .92f, h * .38f, paint);
+      paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawSoftTargets(Canvas canvas) {
+      paint.setStyle(Paint.Style.FILL);
+      paint.setColor(Color.argb(42, 92, 120, 111));
+      rect.set(getWidth() * .08f, getHeight() * .51f, getWidth() * .35f, getHeight() * .84f);
+      canvas.drawRoundRect(rect, dp(12), dp(12), paint);
+      rect.set(getWidth() * .44f, getHeight() * .53f, getWidth() * .76f, getHeight() * .80f);
+      canvas.drawRoundRect(rect, dp(12), dp(12), paint);
+      rect.set(getWidth() * .76f, getHeight() * .38f, getWidth() * .95f, getHeight() * .84f);
+      canvas.drawRoundRect(rect, dp(12), dp(12), paint);
+    }
+
+    private void drawHandle(Canvas canvas, float x, float y) {
+      paint.setColor(Color.rgb(93, 84, 74));
+      rect.set(x - dp(12), y - dp(2), x + dp(12), y + dp(2));
+      canvas.drawRoundRect(rect, dp(2), dp(2), paint);
+    }
+
+    private void drawCup(Canvas canvas, Draggable d) {
+      if (d == null) return;
+      paint.setStyle(Paint.Style.FILL);
+      paint.setColor(d.color);
+      rect.set(d.x - d.r * .58f, d.y - d.r * .48f, d.x + d.r * .44f, d.y + d.r * .48f);
+      canvas.drawRoundRect(rect, dp(9), dp(9), paint);
+
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(dp(5));
+      paint.setColor(d.color);
+      rect.set(d.x + d.r * .18f, d.y - d.r * .16f, d.x + d.r * .78f, d.y + d.r * .25f);
+      canvas.drawArc(rect, -80, 170, false, paint);
+
+      paint.setStyle(Paint.Style.FILL);
+      paint.setColor(Color.argb(95, 255, 255, 255));
+      rect.set(d.x - d.r * .44f, d.y - d.r * .36f, d.x + d.r * .02f, d.y - d.r * .21f);
+      canvas.drawRoundRect(rect, dp(8), dp(8), paint);
+    }
+
+    private void drawPot(Canvas canvas, Draggable d) {
+      if (d == null) return;
+      paint.setStyle(Paint.Style.FILL);
+      paint.setColor(d.color);
+      rect.set(d.x - d.r * .70f, d.y - d.r * .35f, d.x + d.r * .70f, d.y + d.r * .42f);
+      canvas.drawRoundRect(rect, dp(12), dp(12), paint);
+
+      paint.setColor(Color.rgb(75, 82, 86));
+      rect.set(d.x - d.r * .52f, d.y - d.r * .55f, d.x + d.r * .52f, d.y - d.r * .30f);
+      canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+      canvas.drawCircle(d.x, d.y - d.r * .59f, dp(5), paint);
+
+      paint.setStrokeWidth(dp(5));
+      paint.setStyle(Paint.Style.STROKE);
+      rect.set(d.x - d.r * .96f, d.y - d.r * .14f, d.x - d.r * .55f, d.y + d.r * .18f);
+      canvas.drawArc(rect, 120, 170, false, paint);
+      rect.set(d.x + d.r * .55f, d.y - d.r * .14f, d.x + d.r * .96f, d.y + d.r * .18f);
+      canvas.drawArc(rect, -110, 170, false, paint);
+      paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawBroom(Canvas canvas, Draggable d) {
+      if (d == null) return;
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(dp(8));
+      paint.setStrokeCap(Paint.Cap.ROUND);
+      paint.setColor(Color.rgb(126, 83, 48));
+      canvas.drawLine(d.x + d.r * .22f, d.y - d.r * .90f, d.x - d.r * .16f, d.y + d.r * .32f, paint);
+
+      paint.setStrokeCap(Paint.Cap.BUTT);
+      paint.setStyle(Paint.Style.FILL);
+      paint.setColor(Color.rgb(178, 135, 72));
+      path.reset();
+      path.moveTo(d.x - d.r * .50f, d.y + d.r * .24f);
+      path.lineTo(d.x + d.r * .22f, d.y + d.r * .07f);
+      path.lineTo(d.x + d.r * .42f, d.y + d.r * .72f);
+      path.lineTo(d.x - d.r * .38f, d.y + d.r * .86f);
+      path.close();
+      canvas.drawPath(path, paint);
+
+      paint.setStrokeWidth(dp(2));
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setColor(Color.rgb(126, 90, 48));
+      for (int i = 0; i < 5; i++) {
+        float x = d.x - d.r * .35f + i * d.r * .17f;
+        canvas.drawLine(x, d.y + d.r * .32f, x + d.r * .06f, d.y + d.r * .78f, paint);
+      }
+      paint.setStyle(Paint.Style.FILL);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+      switch (event.getActionMasked()) {
         case MotionEvent.ACTION_DOWN:
-          if (distance(e.getX(), e.getY(), dragX, dragY) <= dragRadius * 1.25f) {
-            draggingCircle = true;
+          active = findTouched(event.getX(), event.getY());
+          if (active != null) {
+            grabDx = active.x - event.getX();
+            grabDy = active.y - event.getY();
             getParent().requestDisallowInterceptTouchEvent(true);
+            invalidate();
           }
           return true;
         case MotionEvent.ACTION_MOVE:
-          if (draggingCircle) {
-            dragX = clamp(e.getX(), dragRadius, getWidth() - dragRadius);
-            dragY = clamp(e.getY(), dragRadius, getHeight() - dragRadius);
+          if (active != null) {
+            active.x = clamp(event.getX() + grabDx, active.r * .75f, getWidth() - active.r * .75f);
+            active.y = clamp(event.getY() + grabDy, active.r, getHeight() - active.r * .50f);
             invalidate();
           }
           return true;
         case MotionEvent.ACTION_UP:
-          if (draggingCircle) {
-            draggingCircle = false;
+          if (active != null) {
+            String name = active.name;
+            active = null;
             getParent().requestDisallowInterceptTouchEvent(false);
-            if (activeIndex >= 0 &&
-                distance(dragX, dragY, tx(activeIndex), ty()) <= targetRadius + dragRadius * .55f) {
-              dragX = tx(activeIndex);
-              dragY = ty();
-              roundActive = false;
-              invalidate();
-              if (onCorrect != null) onCorrect.run();
-            }
+            invalidate();
+            if (listener != null) listener.onPlaced(name);
           }
           return true;
         case MotionEvent.ACTION_CANCEL:
-          draggingCircle = false;
+          active = null;
           getParent().requestDisallowInterceptTouchEvent(false);
-          resetDragOnly();
           invalidate();
           return true;
       }
       return true;
     }
 
-    private float distance(float x1, float y1, float x2, float y2) {
-      float dx = x1 - x2, dy = y1 - y2;
-      return (float)Math.sqrt(dx * dx + dy * dy);
+    private Draggable findTouched(float x, float y) {
+      if (broom != null && broom.hit(x, y)) return broom;
+      if (pot != null && pot.hit(x, y)) return pot;
+      if (cup != null && cup.hit(x, y)) return cup;
+      return null;
     }
 
     private float clamp(float v, float lo, float hi) {
       return Math.max(lo, Math.min(v, hi));
     }
+  }
+
+  private static class Draggable {
+    final String name;
+    float x;
+    float y;
+    final float r;
+    final int color;
+
+    Draggable(String name, float x, float y, float r, int color) {
+      this.name = name;
+      this.x = x;
+      this.y = y;
+      this.r = r;
+      this.color = color;
+    }
+
+    boolean hit(float px, float py) {
+      float dx = px - x;
+      float dy = py - y;
+      return Math.sqrt(dx * dx + dy * dy) <= r * 1.25f;
+    }
+  }
+
+  private interface ObjectPlacedListener {
+    void onPlaced(String name);
   }
 }
