@@ -1,0 +1,9 @@
+{
+  "name":"Dual-Task Farbspiel",
+  "short_name":"Farbspiel",
+  "start_url":"./",
+  "display":"standalone",
+  "background_color":"#efece4",
+  "theme_color":"#efece4",
+  "lang":"de"
+}
