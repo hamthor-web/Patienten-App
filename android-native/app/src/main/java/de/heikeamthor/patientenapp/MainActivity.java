@@ -42,6 +42,8 @@ public class MainActivity extends Activity implements RecognitionListener {
   private boolean listenAfterSpeech = false;
   private boolean testingSetup = false;
   private boolean gameListening = false;
+  private boolean gameVisible = false;
+  private boolean pendingFirstRound = false;
 
   private SharedPreferences prefs;
   private LinearLayout root;
@@ -75,7 +77,12 @@ public class MainActivity extends Activity implements RecognitionListener {
         tts.setSpeechRate(0.90f);
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
           @Override public void onStart(String utteranceId) {}
-          @Override public void onError(String utteranceId) {}
+          @Override public void onError(String utteranceId) {
+            if (utteranceId.startsWith("listen_") && listenAfterSpeech) {
+              listenAfterSpeech = false;
+              runOnUiThread(MainActivity.this::startListeningNow);
+            }
+          }
           @Override public void onDone(String utteranceId) {
             if (utteranceId.startsWith("listen_") && listenAfterSpeech) {
               listenAfterSpeech = false;
@@ -84,6 +91,10 @@ public class MainActivity extends Activity implements RecognitionListener {
             }
           }
         });
+        if (pendingFirstRound && gameVisible) {
+          pendingFirstRound = false;
+          runOnUiThread(MainActivity.this::beginGameListening);
+        }
       }
     });
   }
@@ -99,8 +110,12 @@ public class MainActivity extends Activity implements RecognitionListener {
       }
       recognizer.setRecognitionListener(this);
     } catch (Exception ex) {
-      recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-      recognizer.setRecognitionListener(this);
+      try {
+        recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        recognizer.setRecognitionListener(this);
+      } catch (Exception ignored) {
+        recognizer = null;
+      }
     }
   }
 
@@ -133,6 +148,8 @@ public class MainActivity extends Activity implements RecognitionListener {
   }
 
   private void showSetup() {
+    gameVisible = false;
+    stopListening();
     baseRoot();
     root.addView(text("Einrichtung", 30, true));
     root.addView(text("Diese Einrichtung ist nur einmal nötig. Danach startet die Übung direkt.", 18, false));
@@ -171,6 +188,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     });
 
     testButton.setOnClickListener(v -> {
+      stopListening();
       testingSetup = true;
       gameListening = false;
       testStatus.setText("Ich höre gleich zu …");
@@ -185,6 +203,8 @@ public class MainActivity extends Activity implements RecognitionListener {
   }
 
   private void showGame() {
+    gameVisible = true;
+    stopListening();
     baseRoot();
     root.addView(text("Farbspiel", 30, true));
 
@@ -208,7 +228,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     controls.addView(repeat, new LinearLayout.LayoutParams(0, dp(64), 1f));
     root.addView(controls);
 
-    gameStatus = text("Tippen Sie auf „Neue Runde“.", 18, false);
+    gameStatus = text("Die erste Runde startet gleich.", 18, false);
     gameStatus.setGravity(Gravity.CENTER);
     root.addView(gameStatus);
 
@@ -216,7 +236,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     root.addView(setupAgain, fullWidth());
 
     newRound.setOnClickListener(v -> beginGameListening());
-    repeat.setOnClickListener(v -> speak("Nennen Sie eine Farbe. Rot, Blau oder Grün."));
+    repeat.setOnClickListener(v -> beginGameListening());
     setupAgain.setOnClickListener(v -> showSetup());
 
     gameView.setOnCorrectListener(() -> {
@@ -226,6 +246,12 @@ public class MainActivity extends Activity implements RecognitionListener {
         if (gameView != null) gameView.resetRound();
         if (gameStatus != null) gameStatus.setText("Bereit für die nächste Runde.");
       }, 1100);
+    });
+
+    gameView.post(() -> {
+      if (!gameVisible) return;
+      if (ttsReady) beginGameListening();
+      else pendingFirstRound = true;
     });
   }
 
@@ -239,6 +265,7 @@ public class MainActivity extends Activity implements RecognitionListener {
       gameStatus.setText("Spracherkennung ist auf diesem Gerät nicht verfügbar.");
       return;
     }
+    stopListening();
     testingSetup = false;
     gameListening = true;
     gameStatus.setText("Ich höre gleich zu …");
@@ -260,7 +287,7 @@ public class MainActivity extends Activity implements RecognitionListener {
   }
 
   private void startListeningNow() {
-    if (recognizer == null || !hasMicPermission()) return;
+    if (recognizer == null || !hasMicPermission() || isFinishing() || isDestroyed()) return;
     Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "de-DE");
@@ -268,11 +295,19 @@ public class MainActivity extends Activity implements RecognitionListener {
     intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
     intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
     try {
+      recognizer.cancel();
       recognizer.startListening(intent);
       if (testingSetup && testStatus != null) testStatus.setText("Ich höre zu … sagen Sie „Rot“.");
       if (gameListening && gameStatus != null) gameStatus.setText("Ich höre zu …");
     } catch (Exception ex) {
       statusMessage("Spracherkennung konnte nicht gestartet werden.");
+    }
+  }
+
+  private void stopListening() {
+    listenAfterSpeech = false;
+    if (recognizer != null) {
+      try { recognizer.cancel(); } catch (Exception ignored) {}
     }
   }
 
@@ -390,6 +425,7 @@ public class MainActivity extends Activity implements RecognitionListener {
 
   @Override
   protected void onDestroy() {
+    gameVisible = false;
     if (recognizer != null) {
       recognizer.cancel();
       recognizer.destroy();
@@ -495,12 +531,11 @@ public class MainActivity extends Activity implements RecognitionListener {
           }
           return true;
         case MotionEvent.ACTION_UP:
-        case MotionEvent.ACTION_CANCEL:
           if (draggingCircle) {
             draggingCircle = false;
             getParent().requestDisallowInterceptTouchEvent(false);
             if (activeIndex >= 0 &&
-                distance(dragX, dragY, tx(activeIndex), ty()) <= targetRadius) {
+                distance(dragX, dragY, tx(activeIndex), ty()) <= targetRadius + dragRadius * .55f) {
               dragX = tx(activeIndex);
               dragY = ty();
               roundActive = false;
@@ -508,6 +543,12 @@ public class MainActivity extends Activity implements RecognitionListener {
               if (onCorrect != null) onCorrect.run();
             }
           }
+          return true;
+        case MotionEvent.ACTION_CANCEL:
+          draggingCircle = false;
+          getParent().requestDisallowInterceptTouchEvent(false);
+          resetDragOnly();
+          invalidate();
           return true;
       }
       return true;
