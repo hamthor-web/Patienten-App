@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#efece4">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Dual-Task Farbspiel</title>
+<style>
+:root{--bg:#efece4;--panel:#fffdf8;--text:#223038;--muted:#6d777d;--line:#bac2c6;--accent:#536f77;--soft:#dce7e9;--ok:#e5efe7;--warn:#f4e7d8;--red:#c84b4b;--blue:#4f78b8;--green:#4f8a62;--neutral:#909aa0}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px}.app{max-width:760px;margin:auto}.screen{display:none}.screen.active{display:block}.card,.state{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:18px}.state{margin-top:14px;color:var(--muted)}.state.ok{background:var(--ok);color:var(--text)}.state.warn{background:var(--warn);color:var(--text)}h1{margin:0 0 10px;font-size:clamp(1.5rem,5vw,2.2rem)}p{line-height:1.5}.step{display:flex;gap:12px;margin:16px 0;align-items:flex-start}.num{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--soft);font-weight:800;flex:0 0 auto}button{min-height:54px;border-radius:14px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:1rem;font-weight:650;padding:0 16px}.big{width:100%;min-height:64px;background:var(--soft);border-color:var(--accent);font-size:1.1rem}.big:disabled,button:disabled{opacity:.5}.board{position:relative;width:100%;height:390px;background:var(--panel);border:2px solid var(--line);border-radius:24px;overflow:hidden;touch-action:pan-y}.target,.drag{position:absolute;border-radius:50%;display:grid;place-items:center;user-select:none}.target{width:112px;height:112px;border:4px dashed var(--line);background:#f8f7f3}.t1{left:8%;top:34px}.t2{left:50%;top:34px;transform:translateX(-50%)}.t3{right:8%;top:34px}.drag{width:94px;height:94px;left:calc(50% - 47px);top:246px;background:var(--neutral);color:#fff;touch-action:none;z-index:3;font-weight:700;box-shadow:0 6px 18px #0002}.controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.controls button{flex:1 1 150px}.primary{background:var(--soft);border-color:var(--accent)}.tiny{font-size:.9rem;color:var(--muted)}@media(max-width:560px){.board{height:355px}.target{width:96px;height:96px}.t1{left:4%;top:28px}.t2{top:28px}.t3{right:4%;top:28px}.drag{width:86px;height:86px;left:calc(50% - 43px);top:225px}}
+</style>
+</head>
+<body>
+<main class="app">
+<section id="setup" class="screen active">
+<div class="card">
+<h1>Einrichtung</h1>
+<p>Diese Einrichtung ist nur einmal nötig. Danach startet die Übung direkt.</p>
+<div class="step"><div class="num">1</div><div><strong>Mikrofon freigeben</strong><br><span class="tiny">Für die Erkennung von Rot, Blau und Grün.</span></div></div>
+<button id="micBtn" class="big">Mikrofon aktivieren</button>
+<div id="micState" class="state">Noch nicht aktiviert.</div>
+<div class="step"><div class="num">2</div><div><strong>Sprachsteuerung testen</strong><br><span class="tiny">Sagen Sie beim Test einmal „Rot“.</span></div></div>
+<button id="testBtn" class="big" disabled>Sprachsteuerung testen</button>
+<div id="voiceState" class="state">Noch nicht getestet.</div>
+<br><button id="finishBtn" class="big" disabled>Einrichtung abschließen</button>
+</div>
+</section>
+
+<section id="game" class="screen">
+<h1>Farbspiel</h1>
+<p class="tiny">Sprachsteuerung aktiv</p>
+<div id="board" class="board">
+<div id="t1" class="target t1"></div>
+<div id="t2" class="target t2"></div>
+<div id="t3" class="target t3"></div>
+<div id="drag" class="drag">Schieben</div>
+</div>
+<div class="controls">
+<button id="roundBtn" class="primary">Neue Runde</button>
+<button id="repeatBtn">Frage wiederholen</button>
+<button id="setupBtn">Einrichtung</button>
+</div>
+<div id="gameState" class="state">Tippen Sie auf „Neue Runde“.</div>
+<div id="heard" class="tiny"></div>
+</section>
+</main>
+<script>
+(()=>{
+const setup=document.getElementById('setup'),game=document.getElementById('game'),micBtn=document.getElementById('micBtn'),testBtn=document.getElementById('testBtn'),finishBtn=document.getElementById('finishBtn'),micState=document.getElementById('micState'),voiceState=document.getElementById('voiceState'),board=document.getElementById('board'),drag=document.getElementById('drag'),targets=[t1,t2,t3],roundBtn=document.getElementById('roundBtn'),repeatBtn=document.getElementById('repeatBtn'),setupBtn=document.getElementById('setupBtn'),gameState=document.getElementById('gameState'),heard=document.getElementById('heard');
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const colors={rot:['#c84b4b','Rot'],blau:['#4f78b8','Blau'],grün:['#4f8a62','Grün']};
+let rec=null,testing=false,activeTarget=null,roundActive=false,dragging=false,pointerId=null,ox=0,oy=0;
+function show(s){setup.classList.toggle('active',s==='setup');game.classList.toggle('active',s==='game')}
+function voice(){if(!('speechSynthesis'in window))return null;const v=speechSynthesis.getVoices();return v.find(x=>/^de(-|_)/i.test(x.lang))||null}
+function speak(x){if(!('speechSynthesis'in window))return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(x);u.lang='de-DE';u.rate=.9;const v=voice();if(v)u.voice=v;speechSynthesis.speak(u)}
+function norm(x){const t=x.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');if(/\brot\b/.test(t))return'rot';if(/\bblau\b/.test(t))return'blau';if(/\bgrun\b/.test(t)||/\bgruen\b/.test(t))return'grün';return null}
+if(SR){rec=new SR();rec.lang='de-DE';rec.interimResults=false;rec.maxAlternatives=5;rec.continuous=false;rec.onresult=e=>{let found=null,raw='';for(let i=0;i<e.results[0].length;i++){const tx=e.results[0][i].transcript||'';if(!raw)raw=tx;const c=norm(tx);if(c){found=c;break}}if(testing){testing=false;if(found==='rot'){voiceState.className='state ok';voiceState.textContent='Sprachsteuerung funktioniert. „Rot“ wurde erkannt.';finishBtn.disabled=false;speak('Sprachsteuerung funktioniert.')}else{voiceState.className='state warn';voiceState.textContent='„Rot“ wurde noch nicht sicher erkannt. Bitte erneut testen.'}}else{heard.textContent=raw?'Gehört: „'+raw+'“':'';if(found)setRound(found);else{gameState.className='state warn';gameState.textContent='Keine Farbe erkannt. Bitte erneut versuchen.';speak('Rot, Blau oder Grün?')}}};rec.onerror=e=>{(testing?voiceState:gameState).className='state warn';(testing?voiceState:gameState).textContent='Spracherkennung konnte nicht gestartet werden: '+e.error;testing=false}}
+else{micState.className='state warn';micState.textContent='Dieser Browser unterstützt hier keine Spracherkennung.'}
+micBtn.onclick=async()=>{try{const s=await navigator.mediaDevices.getUserMedia({audio:true});s.getTracks().forEach(t=>t.stop());micState.className='state ok';micState.textContent='Mikrofon ist freigegeben.';testBtn.disabled=!rec;speak('Mikrofon ist aktiviert.')}catch(e){micState.className='state warn';micState.textContent='Mikrofon wurde nicht freigegeben. Bitte die Browser-Abfrage mit „Zulassen“ bestätigen.'}};
+testBtn.onclick=()=>{if(!rec)return;testing=true;voiceState.className='state';voiceState.textContent='Ich höre zu … Sagen Sie jetzt „Rot“.';speak('Sagen Sie jetzt Rot.');setTimeout(()=>{try{rec.start()}catch(e){}},700)};
+finishBtn.onclick=()=>{show('game');resetDrag();clearTargets();speak('Einrichtung abgeschlossen.')};
+function clearTargets(){targets.forEach(t=>{t.style.background='#f8f7f3';t.style.borderColor='#bac2c6'})}
+function setRound(c){clearTargets();activeTarget=targets[Math.floor(Math.random()*targets.length)];activeTarget.style.background=colors[c][0];activeTarget.style.borderColor=colors[c][0];roundActive=true;gameState.className='state';gameState.textContent='Jetzt den grauen Kreis zum farbigen Ziel schieben.';speak(colors[c][1]+'. Schieben Sie den Kreis zum passenden Ziel.')}
+roundBtn.onclick=()=>{if(!rec)return;if(roundActive){gameState.textContent='Diese Runde erst beenden.';return}heard.textContent='';gameState.className='state';gameState.textContent='Ich höre zu …';speak('Nennen Sie eine Farbe: Rot, Blau oder Grün.');setTimeout(()=>{try{rec.start()}catch(e){}},850)};
+repeatBtn.onclick=()=>speak('Nennen Sie eine Farbe: Rot, Blau oder Grün.');
+setupBtn.onclick=()=>show('setup');
+function setPos(x,y){drag.style.left=Math.max(0,Math.min(x,board.clientWidth-drag.offsetWidth))+'px';drag.style.top=Math.max(0,Math.min(y,board.clientHeight-drag.offsetHeight))+'px'}
+function resetDrag(){setPos(board.clientWidth/2-drag.offsetWidth/2,board.clientHeight-drag.offsetHeight-46)}
+function center(el){const b=board.getBoundingClientRect(),r=el.getBoundingClientRect();return{x:r.left-b.left+r.width/2,y:r.top-b.top+r.height/2}}
+function dcenter(){return{x:parseFloat(drag.style.left||0)+drag.offsetWidth/2,y:parseFloat(drag.style.top||0)+drag.offsetHeight/2}}
+drag.onpointerdown=e=>{if(!roundActive)return;const r=drag.getBoundingClientRect();dragging=true;pointerId=e.pointerId;ox=e.clientX-r.left;oy=e.clientY-r.top;drag.setPointerCapture(pointerId);e.preventDefault()};
+drag.onpointermove=e=>{if(!dragging||e.pointerId!==pointerId)return;const b=board.getBoundingClientRect();setPos(e.clientX-b.left-ox,e.clientY-b.top-oy);e.preventDefault()};
+function end(e){if(!dragging||e.pointerId!==pointerId)return;dragging=false;const d=dcenter(),t=center(activeTarget);if(Math.hypot(d.x-t.x,d.y-t.y)<=activeTarget.offsetWidth*.5){setPos(t.x-drag.offsetWidth/2,t.y-drag.offsetHeight/2);roundActive=false;gameState.className='state ok';gameState.textContent='Ziel gefunden.';speak('Ziel gefunden.');setTimeout(()=>{clearTargets();activeTarget=null;resetDrag();gameState.className='state';gameState.textContent='Bereit für die nächste Runde.';heard.textContent=''},1100)}try{drag.releasePointerCapture(pointerId)}catch(e){}pointerId=null}
+drag.onpointerup=end;drag.onpointercancel=end;
+if('speechSynthesis'in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>speechSynthesis.getVoices()}
+requestAnimationFrame(()=>{resetDrag();clearTargets()});window.onresize=resetDrag;
+if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+})();
+</script>
+</body></html>
