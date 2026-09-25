@@ -8,7 +8,7 @@ android {
 
   defaultConfig {
     applicationId 'de.heikeamthor.patientenapp'
-    minSdk 31
+    minSdk 23
     targetSdk 36
     versionCode 1
     versionName '0.1'
