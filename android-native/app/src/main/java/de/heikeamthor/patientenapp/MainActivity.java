@@ -83,6 +83,8 @@ public class MainActivity extends Activity {
 
     statusText = text("Die Aufgabe bleibt sichtbar. Sie können sich Zeit lassen.", 17, false);
     statusText.setTextColor(MUTED);
+    statusText.setGravity(Gravity.CENTER_VERTICAL);
+    statusText.setMinHeight(dp(58));
     root.addView(statusText);
 
     gameView = new KitchenGameView();
@@ -177,8 +179,6 @@ public class MainActivity extends Activity {
     private Draggable active;
     private float grabDx;
     private float grabDy;
-    private int lastW = -1;
-    private int lastH = -1;
     private ObjectPlacedListener listener;
 
     KitchenGameView() {
@@ -193,13 +193,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
       super.onSizeChanged(w, h, oldw, oldh);
-      if (w != lastW || h != lastH || cup == null) {
-        lastW = w;
-        lastH = h;
+      if (cup == null) {
         cup = new Draggable("Die Tasse", w * .21f, h * .70f, dp(42), Color.rgb(112, 148, 165));
         pot = new Draggable("Der Kochtopf", w * .52f, h * .73f, dp(50), Color.rgb(96, 104, 108));
         broom = new Draggable("Der Besen", w * .82f, h * .68f, dp(54), Color.rgb(164, 116, 72));
+      } else {
+        keepVisible(cup);
+        keepVisible(pot);
+        keepVisible(broom);
       }
+    }
+
+    private void keepVisible(Draggable d) {
+      if (d == null) return;
+      d.x = clamp(d.x, d.r * .75f, getWidth() - d.r * .75f);
+      d.y = clamp(d.y, d.r, getHeight() - d.r * .50f);
     }
 
     @Override
